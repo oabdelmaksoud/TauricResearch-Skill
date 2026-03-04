@@ -5,7 +5,7 @@
 <div align="center">
 
 [![Forked from TauricResearch](https://img.shields.io/badge/forked%20from-TauricResearch%2FTradingAgents-blue?logo=github)](https://github.com/TauricResearch/TradingAgents)
-[![OpenClaw Skill](https://img.shields.io/badge/OpenClaw-Skill-7C3AED?logo=data:image/svg+xml;base64,)](https://openclaw.ai)
+[![OpenClaw Skill](https://img.shields.io/badge/OpenClaw-Skill-7C3AED)](https://openclaw.ai)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![LangGraph](https://img.shields.io/badge/LangGraph-powered-orange)](https://github.com/langchain-ai/langgraph)
 [![arXiv](https://img.shields.io/badge/arXiv-2412.20138-B31B1B?logo=arxiv)](https://arxiv.org/abs/2412.20138)
@@ -17,95 +17,160 @@
 # TauricResearch-Skill — OpenClaw Skill
 
 > **Forked from [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)**  
-> This repository adapts the original multi-agent LLM trading framework as a native **OpenClaw Skill**, so it can be triggered conversationally through OpenClaw agents and routed exclusively through the OpenClaw CLI — no separate LLM API keys required.
+> This repository adapts the original multi-agent LLM trading framework as a native **OpenClaw Skill**, routing all LLM inference through the OpenClaw CLI — no separate API keys required.
 
 ---
 
-## What Was Changed
-
-This fork preserves the **entire original TauricResearch architecture** (LangGraph state machine, analyst/researcher/trader/risk roles, in-memory debate flow) and makes the following additions:
+## What Was Changed from the Original
 
 | Layer | Original | This Fork |
 |-------|----------|-----------|
 | **LLM Provider** | OpenAI / Anthropic / Google (direct APIs) | `ChatOpenClawCLI` — routes 100% of LLM calls through `openclaw agent` CLI |
-| **Orchestration** | LangGraph state machine | Preserved exactly as original |
-| **Data Sources** | Yahoo Finance, Alpha Vantage, SEC EDGAR | + Guru Signals (13F/Congressional), Breaking News Catalyst Cache, Hedge Fund Ownership |
+| **Graph Architecture** | LangGraph state machine | Preserved exactly as original |
+| **Data Sources** | Yahoo Finance, Alpha Vantage, SEC EDGAR | + Guru Signals, Breaking News Cache, Institutional Ownership |
 | **Skill Registration** | None | `SKILL.md` — OpenClaw agents trigger this natively |
-| **API Keys** | Required per provider | Not required — OpenClaw gateway handles routing |
+| **API Keys** | Required per provider | Not required — OpenClaw handles routing |
 
 ---
 
-## Architecture
+## Full Workflow
 
+```mermaid
+flowchart TD
+    USER["🗣️ User / Cron Trigger\n'Analyze NVDA using Tauric'"]
+    SKILL["📋 SKILL.md\nOpenClaw Skill Registration\nDetects trigger phrases"]
+    GRAPH["🕸️ LangGraph State Machine\nTradingAgentsGraph.propagate()"]
+
+    USER --> SKILL
+    SKILL --> GRAPH
+
+    subgraph ANALYSTS ["Analyst Team (Parallel)"]
+        MA["📈 Market Analyst\nstock data · technicals\nMACD · RSI · VWAP · BB"]
+        NA["📰 News Analyst\nworld news · insider tx\nbreaking news catalysts\nguru RSS signals"]
+        SA["💬 Social Analyst\nsentiment · Reddit\nStocktwits · FinBERT"]
+        FA["📊 Fundamentals Analyst\nearnings · balance sheet\ncashflow · 13F ownership\nguru signal bonuses"]
+    end
+
+    GRAPH --> ANALYSTS
+
+    subgraph LLM ["LLM Calls — All via OpenClaw CLI"]
+        CLI["openclaw agent --agent main --message ... --json"]
+    end
+
+    MA --> LLM
+    NA --> LLM
+    SA --> LLM
+    FA --> LLM
+
+    subgraph RESEARCH ["Researcher Team (Debate)"]
+        BULL["🐂 Bull Researcher\nAnalyzes upside case\nbased on analyst reports"]
+        BEAR["🐻 Bear Researcher\nAnalyzes downside risk\nstructured rebuttal"]
+    end
+
+    LLM --> RESEARCH
+
+    JUDGE["⚖️ Investment Judge\nBalancer — picks winner\nof Bull vs Bear debate"]
+    TRADER["🤝 Trader Agent\nSize + timing decision\nbased on judge verdict"]
+
+    subgraph RISK ["Risk Management"]
+        RA["⚡ Aggressive Debator"]
+        RC["🛡️ Conservative Debator"]
+        RN["⚖️ Neutral Debator"]
+        RJUDGE["📋 Risk Judge\nFinal portfolio decision"]
+    end
+
+    RESEARCH --> JUDGE
+    JUDGE --> TRADER
+    TRADER --> RISK
+    RISK --> RJUDGE
+
+    DECISION["✅ Final Decision\nBUY / SELL / HOLD\n+ position size + rationale"]
+    MEMORY["💾 Memory Update\nBull/Bear/Trader/Risk memories\nreflect on outcomes for next run"]
+
+    RJUDGE --> DECISION
+    DECISION --> MEMORY
+
+    style SKILL fill:#7C3AED,color:#fff
+    style LLM fill:#1e3a5f,color:#fff
+    style DECISION fill:#166534,color:#fff
+    style MEMORY fill:#92400e,color:#fff
 ```
-User (conversational): "Analyze NVDA using Tauric"
-        │
-        ▼
-   OpenClaw Gateway (reads SKILL.md, detects trigger)
-        │
-        ▼
-   TauricResearch LangGraph
-   ┌─────────────────────────────────────────────────────────┐
-   │  Market Analyst  ──── get_stock_data, get_indicators    │
-   │  News Analyst    ──── get_news, get_breaking_news_*     │
-   │  Social Analyst  ──── get_news                          │  
-   │  Fundamentals    ──── get_fundamentals, get_guru_*      │
-   └─────────────────────────────────────────────────────────┘
-        │
-        │  All LLM calls
-        ▼
-   ChatOpenClawCLI
-   subprocess(["openclaw", "agent", "--agent", "main", "--message", ...])
-        │
-        ▼
-   Bull vs Bear Debate → Judge → Decision (BUY / SELL / HOLD)
-```
+
+---
+
+## Data Sources
+
+This fork augments the original framework with additional data sources, all wired as native LangGraph `@tool` functions:
+
+### Original (TauricResearch)
+| Tool | Provider | Data |
+|------|----------|------|
+| `get_stock_data` | Yahoo Finance / Alpha Vantage | OHLCV bars, volume |
+| `get_indicators` | Yahoo Finance / Alpha Vantage | MACD, RSI, BB, VWAP, EMA |
+| `get_fundamentals` | Yahoo Finance / Alpha Vantage | P/E, revenue, margins |
+| `get_balance_sheet` | Yahoo Finance / Alpha Vantage | Assets, liabilities, equity |
+| `get_cashflow` | Yahoo Finance / Alpha Vantage | Operating/investing/financing cash |
+| `get_income_statement` | Yahoo Finance / Alpha Vantage | Revenue, EPS, net income |
+| `get_news` | Yahoo Finance / Alpha Vantage | Recent news headlines per ticker |
+| `get_global_news` | Alpha Vantage | Macro/world news |
+| `get_insider_transactions` | Alpha Vantage | Form 4 insider buy/sell filings |
+
+### Added by This Fork
+| Tool | Analyst | Source | Data |
+|------|---------|--------|------|
+| `get_guru_signals(ticker)` | News + Fundamentals | SEC EDGAR, HouseStockWatcher, SenateStockWatcher, GuruFocus RSS | Congressional STOCK Act buys, hedge fund 13F new positions, guru commentary from Ackman, Druckenmiller, Buffett, Pelosi |
+| `get_breaking_news_catalysts(ticker)` | News | 20 RSS feeds + Finnhub (refreshed every 2 min) | Tier 1 (war, Fed emergency, market halt) and Tier 2 (earnings, M&A, FDA, activist) catalyst events from the last 4 hours |
+| `get_institutional_ownership(ticker)` | Fundamentals | SEC EDGAR 13F filings (live, cached 24h) | Hedge fund holdings from Berkshire, Citadel, Renaissance, Bridgewater, Tiger Global, Viking Global |
 
 ---
 
 ## Installation
 
-### 1. Install as an OpenClaw Skill
+### 1. Clone as an OpenClaw Skill
 
 ```bash
-git clone https://github.com/oabdelmaksoud/TauricResearch-Skill.git ~/.openclaw/skills/TauricResearch-Skill
+git clone https://github.com/oabdelmaksoud/TauricResearch-Skill.git \
+  ~/.openclaw/skills/TauricResearch-Skill
 ```
 
-OpenClaw will auto-discover the skill via `SKILL.md`. No restart required.
+OpenClaw auto-discovers the skill via `SKILL.md`. No restart needed.
 
-### 2. Install Python Dependencies
+### 2. Install Dependencies
 
 ```bash
 cd ~/.openclaw/skills/TauricResearch-Skill
 pip install -r requirements.txt
 ```
 
-### 3. No API Keys Needed
+### 3. Optional Environment Variables
 
-All LLM inference routes through your OpenClaw gateway. The only optional keys are for market data:
+No LLM API keys required. Only optional market data keys:
 
 ```bash
-# Optional — market data sources (defaults to Yahoo Finance if not set)
+# Market data (falls back to Yahoo Finance if not set)
 ALPHA_VANTAGE_API_KEY=...
 FINNHUB_API_KEY=...
+
+# Alpaca (for live trading integrations)
 ALPACA_API_KEY=...
 ALPACA_SECRET_KEY=...
-```
 
-Copy `.env.example` to `.env` and fill in any optional keys:
-```bash
-cp .env.example .env
+# OpenClaw agent override (default: 'main')
+TRADINGAGENTS_DEEP_LLM=macro
+TRADINGAGENTS_QUICK_LLM=main
 ```
 
 ---
 
 ## Usage
 
-### Conversational (via OpenClaw)
+### Via OpenClaw (Conversational)
 
-Just talk to any OpenClaw agent:
-> *"Run a Tauric analysis on NVDA"*  
-> *"Should I buy or sell MSFT? Use the multi-agent framework."*
+```
+"Analyze NVDA using the Tauric framework"
+"Run a multi-agent trading debate on AAPL"
+"Should I buy or sell MSFT? Deep analysis."
+```
 
 ### CLI
 
@@ -114,61 +179,34 @@ cd ~/.openclaw/skills/TauricResearch-Skill
 python -m cli.main
 ```
 
-Or programmatically:
+### Python
 
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 
-# Defaults to OpenClaw CLI provider — no API key setup required
+# Defaults to openclaw provider — no API keys required
 ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
 _, decision = ta.propagate("NVDA", "2026-01-15")
 print(decision)  # BUY / SELL / HOLD
 ```
 
-### Advanced: Select a different OpenClaw agent
-
-```python
-config = DEFAULT_CONFIG.copy()
-config["deep_think_llm"] = "macro"   # Use your 'macro' OpenClaw agent for deep reasoning
-config["quick_think_llm"] = "main"   # Use 'main' for fast tasks
-config["max_debate_rounds"] = 2
-
-ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
-```
-
 ---
 
-## ProTrader Data Tools
-
-This fork adds three new LangGraph `@tool` functions bound to the analyst nodes:
-
-| Tool | Analyst | Source |
-|------|---------|--------|
-| `get_guru_signals(ticker)` | News + Fundamentals | Congressional STOCK Act buys, hedge fund 13F filings, GuruFocus RSS |
-| `get_breaking_news_catalysts(ticker)` | News | Tier 1/2 events from a 24/7 RSS + Finnhub cache |
-| `get_institutional_ownership(ticker)` | Fundamentals | Live SEC EDGAR 13F holdings for 6 major funds |
-
-These tools require no configuration. `get_guru_signals` and `get_breaking_news_catalysts` read from `logs/` files populated by standalone cron jobs (optional).
-
----
-
-## Key Files in This Fork
+## Key New Files
 
 ```
 TauricResearch-Skill/
-├── SKILL.md                                       ← OpenClaw registration
+├── SKILL.md                                      ← OpenClaw trigger registration
 ├── tradingagents/
-│   ├── default_config.py                          ← Provider defaults to 'openclaw'
+│   ├── default_config.py                         ← Provider defaults to 'openclaw'
 │   ├── llm_clients/
-│   │   ├── openclaw_client.py                     ← ChatOpenClawCLI (BaseChatModel)
-│   │   └── openclaw_client_wrapper.py             ← OpenClawClient (BaseLLMClient)
+│   │   ├── openclaw_client.py                    ← ChatOpenClawCLI (BaseChatModel)
+│   │   └── openclaw_client_wrapper.py            ← OpenClawClient (BaseLLMClient)
 │   ├── agents/utils/
-│   │   └── protrader_tools.py                     ← 3 new LangGraph @tool functions
+│   │   └── protrader_tools.py                    ← 3 new LangGraph @tool functions
 │   └── graph/
-│       └── trading_graph.py                       ← ProTrader tools wired in ToolNodes
+│       └── trading_graph.py                      ← ProTrader tools bound to ToolNodes
 └── [all original TauricResearch files preserved]
 ```
 
@@ -176,14 +214,10 @@ TauricResearch-Skill/
 
 ## Credits
 
-- **Original Framework:** [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) — *Multi-Agents LLM Financial Trading Framework* ([arXiv:2412.20138](https://arxiv.org/abs/2412.20138))
+- **Original Framework:** [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) — *[arXiv:2412.20138](https://arxiv.org/abs/2412.20138)*
 - **OpenClaw Adaptation:** [@oabdelmaksoud](https://github.com/oabdelmaksoud)
 
----
-
 ## Citation
-
-If you use this work, please cite the original TradingAgents paper:
 
 ```bibtex
 @misc{xiao2025tradingagentsmultiagentsllmfinancial,
@@ -197,6 +231,4 @@ If you use this work, please cite the original TradingAgents paper:
 }
 ```
 
----
-
-> **Disclaimer:** This framework is designed for research purposes only. Trading performance may vary. It is not intended as financial, investment, or trading advice. See [Tauric disclaimer](https://tauric.ai/disclaimer/).
+> **Disclaimer:** Research purposes only. Not financial advice. See [Tauric disclaimer](https://tauric.ai/disclaimer/).
